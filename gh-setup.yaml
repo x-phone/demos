@@ -1,0 +1,50 @@
+account:
+  type: organization
+  name: x-phone
+
+defaults:
+  visibility: public
+  default_branch: main
+  delete_branch_on_merge: true
+
+repos:
+  - name: demos
+    description: "Working examples and tutorials for the x-phone ecosystem — xphone-go, xphone-rust, xbridge, xpbx."
+    topics:
+      - demos
+      - examples
+      - tutorials
+      - telephony
+      - sip
+      - voip
+      - voice-agent
+      - ai-voice
+      - speech-to-text
+      - text-to-speech
+      - go
+      - rust
+    homepage: ""
+    visibility: public
+
+labels:
+  replace_defaults: true
+  list:
+    - name: bug
+      color: d73a4a
+      description: Something isn't working
+    - name: enhancement
+      color: a2eeef
+      description: New feature or request
+    - name: documentation
+      color: 0075ca
+      description: Improvements or additions to documentation
+    - name: good first issue
+      color: 7057ff
+      description: Good for newcomers
+    - name: new-demo
+      color: "008672"
+      description: Proposal for a new demo
+
+security:
+  dependabot: true
+  secret_scanning: true
