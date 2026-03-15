@@ -4,21 +4,29 @@
 // using faster-whisper for speech-to-text and Kokoro for text-to-speech.
 // No cloud APIs or API keys required — everything runs locally in Docker.
 //
+// The demo runs two connection modes simultaneously:
+//
+//   - Phone mode: registers as a SIP extension (e.g. 1002) — dial 1002 to reach it
+//   - Server mode: listens on a SIP port (e.g. :5080) for trunk calls — dial 2000
+//
 // Architecture:
 //
 //	Caller → SIP PBX → xphone-go (this app)
-//	                        │
-//	                        ├── PCMReader ([]int16, 8kHz, 20ms frames)
-//	                        │       ↓
-//	                        │   Energy VAD (silence detection)
-//	                        │       ↓ (on silence after speech)
-//	                        │   WAV buffer → faster-whisper HTTP :8000
-//	                        │       ↓
-//	                        │   transcript text
-//	                        │       ↓
-//	                        │   Kokoro TTS HTTP :8880
-//	                        │       ↓ (24kHz PCM → downsample to 8kHz)
-//	                        └── PacedPCMWriter (plays audio back to caller)
+//	           │              │
+//	           │              ├── PCMReader ([]int16, 8kHz, 20ms frames)
+//	           │              │       ↓
+//	           │              │   Energy VAD (silence detection)
+//	           │              │       ↓ (on silence after speech)
+//	           │              │   WAV buffer → faster-whisper HTTP :8000
+//	           │              │       ↓
+//	           │              │   transcript text
+//	           │              │       ↓
+//	           │              │   Kokoro TTS HTTP :8880
+//	           │              │       ↓ (24kHz PCM → downsample to 8kHz)
+//	           │              └── PacedPCMWriter (plays audio back to caller)
+//	           │
+//	           ├── dial 1002 → Phone mode (SIP registration)
+//	           └── dial 2000 → Server mode (SIP trunk via VOICEWORKER)
 //
 // Key difference from the Deepgram version (echo-ai-cloud):
 // STT is batch HTTP, not streaming WebSocket. We use energy-based silence
@@ -72,37 +80,37 @@ func main() {
 	sipPass := requireEnv("SIP_PASSWORD")
 	sipHost := requireEnv("SIP_HOST")
 	sipTransport := envOr("SIP_TRANSPORT", "udp")
+	serverListen := envOr("SERVER_LISTEN", "0.0.0.0:5080")
+	serverRTPAddr := envOr("SERVER_RTP_ADDRESS", "")
 	sttURL := envOr("STT_URL", "http://localhost:8000")
 	ttsURL := envOr("TTS_URL", "http://localhost:8880")
 
 	cfg := &localConfig{sttURL: sttURL, ttsURL: ttsURL}
 
-	// Create a new SIP phone. xphone handles SIP registration, call state
-	// machines, RTP media, and codec encode/decode under the hood.
-	phone := xphone.New(
-		xphone.WithCredentials(sipUser, sipPass, sipHost),
-		xphone.WithTransport(sipTransport, nil),
-		xphone.WithCodecs(xphone.CodecPCMU, xphone.CodecPCMA),
-	)
-
-	// Handle incoming calls: auto-answer and start the echo loop.
-	phone.OnIncoming(func(call xphone.Call) {
+	// Shared handler for incoming calls — used by both Phone and Server mode.
+	onIncoming := func(call xphone.Call) {
 		log.Printf("Incoming call from %s", call.From())
 		if err := call.Accept(); err != nil {
 			log.Printf("Accept failed: %v", err)
 			return
 		}
 		go handleCall(call, cfg)
-	})
+	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
+	// --- Phone mode: register as a SIP extension (dial 1002) ---
+	phone := xphone.New(
+		xphone.WithCredentials(sipUser, sipPass, sipHost),
+		xphone.WithTransport(sipTransport, nil),
+		xphone.WithCodecs(xphone.CodecPCMU, xphone.CodecPCMA),
+	)
+	phone.OnIncoming(onIncoming)
 	phone.OnRegistered(func() {
-		log.Println("Registered — waiting for calls")
+		log.Printf("Phone mode: registered as %s", sipUser)
 	})
 
-	// Connect to the SIP server and register our extension.
 	log.Printf("Connecting to %s as %s (%s)...", sipHost, sipUser, sipTransport)
 	if err := phone.Connect(ctx); err != nil {
 		log.Fatalf("Connect failed: %v", err)
@@ -111,10 +119,30 @@ func main() {
 		log.Fatalf("Registration failed — check credentials and SIP host")
 	}
 
+	// --- Server mode: listen for SIP trunk calls (dial 2000) ---
+	server := xphone.NewServer(xphone.ServerConfig{
+		Listen:     serverListen,
+		RTPAddress: serverRTPAddr,
+		CodecPrefs: []xphone.Codec{xphone.CodecPCMU, xphone.CodecPCMA},
+		Peers: []xphone.PeerConfig{
+			{Name: "xpbx", Hosts: []string{"0.0.0.0/0"}},
+		},
+	})
+	server.OnIncoming(onIncoming)
+	go func() {
+		log.Printf("Server mode: listening on %s", serverListen)
+		if err := server.Listen(ctx); err != nil {
+			log.Printf("Server listen error: %v", err)
+		}
+	}()
+
+	log.Println("Waiting for calls...")
+
 	// Block until Ctrl+C or SIGTERM.
 	<-ctx.Done()
 	log.Println("Shutting down...")
 	phone.Disconnect()
+	server.Shutdown()
 }
 
 type localConfig struct {
