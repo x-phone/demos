@@ -11,6 +11,13 @@ Working examples that show how to build voice applications with the [x-phone](ht
 | [echo-ai-cloud](xphone-go/echo-ai-cloud/) | Answers a call, echoes back what the caller says | Deepgram (streaming WebSocket STT + HTTP TTS) | Yes (Deepgram) |
 | [echo-ai-local](xphone-go/echo-ai-local/) | Same, but fully local — no cloud APIs | faster-whisper + Kokoro (Docker) | No |
 
+### Benchmarks
+
+| Bench | What it measures | Needs |
+|---|---|---|
+| [framebench](xphone-go/framebench/) | Frame-timing distribution at 1–50 concurrent calls, loopback via fakepbx | nothing — `go test` |
+| [trunkbench](xphone-go/trunkbench/) | Same metric over a live SIP trunk | trunk credentials |
+
 <!-- Future sections:
 ### [xbridge](xbridge/) — using the voice gateway (any language)
 ### [xpbx](xpbx/) — PBX configuration and routing
